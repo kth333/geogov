@@ -2,30 +2,37 @@ import json
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 
-PROMPT_TMPL = """You are a compliance triage assistant.
-
-Return ONLY a single JSON object matching this schema:
-{format_instructions}
-No prose, no markdown, no code fences, no backticks, no lists/arrays at the top level.
+PROMPT_TMPL = """You are a compliance triage assistant. Output ONLY one JSON object per {format_instructions}. No prose/markdown/fences.
 
 Inputs:
-- Feature Title: {title}
+- Title: {title}
 - Description: {description}
 - Docs: {docs}
-- Retrieved Evidence (regulations): {evidence}
+- Retrieval (supportive only; never creates regs): {evidence}
 
-Decision rules:
-- TRUE only if text indicates a legal obligation (e.g., minors + personalized feed, CSAM reporting, or explicit 'to comply with ...').
-- FALSE if clearly business-only (A/B test, holdback, performance, geofence for market testing) with no safety/legal cues.
-- NULL if geography is mentioned but the intent/legal trigger is unclear (e.g., 'global except KR' without rationale).
-- Regulations must be a subset of: {allowed_regs}. Omit if no evidence.
-- When listing "regulations", return the REG_ID exactly as shown (e.g., dsa, california_kids_act).
+Decision (apply in order):
+1) EXPLICIT HOOK → requires_geo_logic=true
+   - Hook = (law/regulator/article) OR (jurisdiction + minors + curfew/parental-controls) OR
+     (jurisdiction + minors + PF/recs) OR explicit CSAM/NCMEC/2258A terms.
+   - Retrieval can help choose among allowed regs but MUST NOT create a reg if inputs lack a hook.
 
-Rules for `reasoning`:
-- Use your own words; DO NOT quote or closely paraphrase the Title/Description.
-- Base any regulation claims ONLY on the provided evidence block; if none, set requires_geo_logic=null and regulations=[].
+2) BUSINESS-ONLY → requires_geo_logic=false
+   - If clearly business related, e.g., A/B, experiment, holdback, feature flag, staged rollout, performance/autoplay,
+     UI/UX/layout/theme, leaderboard, payouts, upload limits, friend suggestions, avatars/GIFs,
+     video replies — and no explicit hook.
 
-Be concise in reasoning. Set confidence 0–1.
+3) AMBIGUOUS GEO INTENT ONLY → requires_geo_logic=null
+   - Geo constraints (e.g., “global except KR”, “EU-only”, “exclude JP”) with no explicit hook and
+     not clearly product-only.
+
+Regulations:
+- Subset of {allowed_regs}, exact IDs. Only set if requires_geo_logic=true **and** the hook appears
+  in Title/Description/Docs (not retrieval). Else [].
+
+Fields:
+- reasoning (≤ 25 words): If false/null, do NOT mention laws, regulators, or jurisdictions; give a
+  product-only rationale. 
+- confidence: 0–1, conservative when unsure.
 """
 
 def build_prompt(allowed_ids, parser: PydanticOutputParser) -> ChatPromptTemplate:

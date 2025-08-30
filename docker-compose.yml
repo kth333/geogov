@@ -6,18 +6,28 @@ services:
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-lc", "ollama list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
-      - ollama
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
     entrypoint: ["/bin/sh","-lc",
-      "until curl -fsS http://ollama:11434/api/version >/dev/null; do sleep 1; done; \
+      "echo 'Waiting for Ollama...'; \
+       until ollama list >/dev/null 2>&1; do sleep 1; done; \
+       echo 'Pulling model...'; \
        ollama pull qwen2.5:3b-instruct"
     ]
-
+  
   qdrant:
     image: qdrant/qdrant:latest
     ports:

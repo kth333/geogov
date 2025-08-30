@@ -23,13 +23,72 @@ abstain_patterns:
     - "(?i)(except|minus).*\\bKR\\b.*(global(ly)?|worldwide)"
 
 business_only_hints:
-  - "(?i)A/B"
-  - "(?i)experiment"
-  - "(?i)market testing"
-  - "(?i)staged rollout"
-  - "(?i)holdback"
-  - "(?i)feature flag"
-  - "(?i)geo-?fence(s|d)?"
+  # --- experimentation / rollout ---
+  - '(?i)\b(ab|a/?b|a-?b)\s*(test|testing|experiment|exp)\b'
+  - '(?i)\bmultivariate(?:\s+test(?:ing)?)?\b'
+  - '(?i)\bmvt\b'
+  - '(?i)\b(control|treatment)\s+group\b'
+  - '(?i)\bvariant(s)?\b'
+  - '(?i)\bbucket(ed|ing)?\b'
+  - '(?i)\bcohort(s)?\b'
+  - '(?i)\bramp(?:ing)?\s*(up|down)?\b'
+  - '(?i)\bcanary\b'
+  - '(?i)\b(progressive|gradual)\s+rollout\b'
+  - '(?i)\bpilot\b'
+  - '(?i)proof\s+of\s+concept'
+  - '(?i)\bbeta\b'
+  - '(?i)\balpha\b'
+  - '(?i)\bdogfood(ing)?\b'
+  - '(?i)\binternal\s+(test|testing|pilot|beta)\b'
+  - '(?i)\bstaff[-\s]?only\b'
+  - '(?i)\bshadow\s*mode\b'
+  - '(?i)\bdark\s+launch\b'
+  - '(?i)\bsoft\s+launch\b'
+  - '(?i)\bquiet\s+launch\b'
+  - '(?i)\bfeature\s+(toggle|switch|gate)\b'
+  - '(?i)\bkill\s+switch\b'
+  - '(?i)\broll(?:out|back|forward)\b'
+
+  # --- pure UI/UX tweaks ---
+  - '(?i)\bui\s*overhaul\b'
+  - '(?i)\bui\b'
+  - '(?i)\bux\b'
+  - '(?i)\blayout\b'
+  - '(?i)\bredesign\b'
+  - '(?i)\breskin\b'
+  - '(?i)\brefresh\b'
+  - '(?i)\btheme\b'
+  - '(?i)\bdark\s*(mode|theme)\b'
+  - '(?i)\baccessibilit(?:y|ies).*(contrast|font|theme)'
+
+  # --- media / content presentation ---
+  - '(?i)\bautoplay\b'
+  - '(?i)\binfinite\s+scroll\b'
+  - '(?i)\bcarousel\b'
+  - '(?i)\bvideo\s+repl(?:y|ies)\b'
+  - '(?i)\bstories\b'
+  - '(?i)\breaction\s+gifs?\b'
+  - '(?i)\bstickers?\b'
+  - '(?i)\bemoji\b'
+
+  # --- gamification / creator UX ---
+  - '(?i)\bleaderboard(s)?\b'
+  - '(?i)\bpoints?\b'
+  - '(?i)\brank(?:ing|s)?\b'
+  - '(?i)\bbadges?\b'
+  - '(?i)\bachievement(s)?\b'
+  - '(?i)\bcreator\s+fund\b'
+  - '(?i)\bpayout(s)?\b'
+
+  # --- limits / modes (product-y) ---
+  - '(?i)\bupload\s+limit(s)?\b'
+  - '(?i)\brate\s+limit(s|ing)?\b'
+  - '(?i)\bguest\s+mode\b'
+
+  # --- regional product pilots (non-legal) ---
+  - '(?i)\btrial\s+run\b'
+  - '(?i)\bgeo(?:-|\s*)bucket(s|ing)?\b'
+  - '(?i)\b(region|country|market|locale)[-\s]?(first|only)\b'
 
 minors_hints:
   - "(?i)minor(s)?"

@@ -14,7 +14,7 @@ from langchain_community.chat_models import ChatOllama
 
 from .models import GeoDecision, RegulationHit
 from .preprocess import preprocess_payload
-from .prompts import build_prompt, format_evidence
+from .prompts import build_prompt
 from .rules import (
     build_reg_hits,
     evidence_gate,
@@ -61,9 +61,9 @@ def _make_llm():
     return ChatOllama(
         model=model,
         base_url=base_url,
-        temperature=0.1,
+        temperature=0.0,
         keep_alive="30m",
-        num_ctx=1024,
+        num_ctx=4096,
         num_predict=96,
         num_thread=0,
         format="json",
@@ -100,22 +100,75 @@ def _support_by_reg(hits: List[RegulationHit], canon_map: Dict[str, str] | None 
         best[hid] = max(best.get(hid, 0.0), float(h.score))
     return best
 
-def _recalibrate_confidence(decision: GeoDecision, hits: List[RegulationHit], canon_map: Dict[str, str] | None = None) -> GeoDecision:
+def _recalibrate_confidence(
+    decision: GeoDecision,
+    hits: List[RegulationHit],
+    canon_map: Dict[str, str] | None = None,
+    min_sim: float = 0.50,
+) -> GeoDecision:
     """
-    Blend LLM confidence with retrieval support and cap. Prevents 1.0 everywhere.
-    Uses canonicalization so synonyms line up with decision.regulations.
+    Calibrate confidence primarily from retrieval support.
+    - True decisions with regs: 0.30..0.90 based on support; penalize if below min_sim.
+    - False (pure product/A/B/UX): be confident in the False (e.g., 0.85).
+    - None (abstain-ish): keep low (≤0.40).
     """
     best = _support_by_reg(hits, canon_map=canon_map)
 
+    # No regulations kept
     if not decision.regulations:
-        decision.confidence = round(min(float(decision.confidence or 0.0), 0.60), 3)
+        if decision.requires_geo_logic is False:
+            decision.confidence = max(float(decision.confidence or 0.0), 0.85)  # confident business-only / non-legal
+        else:
+            # abstain-ish / unclear cases
+            prior = float(decision.confidence or 0.0)
+            decision.confidence = round(min(prior, 0.40), 3)
         return decision
 
-    sims = [best.get(r, 0.0) for r in decision.regulations]
-    support = max(sims) if sims else 0.0  # strongest retrieved evidence for any kept reg
-    mapped = 0.60 + 0.35 * support        # 0.60..0.95 band
-    decision.confidence = round(min(float(decision.confidence or 0.0), mapped, 0.95), 3)
+    # Regulations present → map evidence strength
+    support = max((best.get(r, 0.0) for r in decision.regulations), default=0.0)
+    support = max(0.0, min(1.0, support))
+
+    base, span = 0.30, 0.60            # final band: 0.30..0.90
+    mapped = base + span * support
+
+    # Penalize if under evidence threshold
+    if support < float(min_sim):
+        mapped = min(mapped, 0.50)
+
+    # Ignore prior LLM number; use retrieval-driven mapping, cap at 0.95
+    decision.confidence = round(min(mapped, 0.95), 3)
     return decision
+
+def _norm(s: str) -> str:
+    import re
+    y = re.sub(r"[^a-z0-9\s_]", "", (s or "").strip().lower())
+    return re.sub(r"\s+", " ", y).strip()
+
+def _build_canon_map(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Build alias -> canonical map from YAML:
+    """
+    out: Dict[str, str] = {}
+    syn = (cfg.get("synonyms") or {})
+    for canon, aliases in syn.items():
+        c = _norm(canon)
+        out[c] = c  # map canonical to itself
+        for a in (aliases or []):
+            out[_norm(a)] = c
+    return out
+
+def _as_str_list(x):
+    """Force nested/odd LLM outputs into a flat list[str]."""
+    if x is None:
+        return []
+    if isinstance(x, str):
+        return [x]
+    if isinstance(x, list):
+        out = []
+        for i in x:
+            out.extend(_as_str_list(i))
+        return out
+    return [str(x)]
 
 # -------------------- main class --------------------
 
@@ -124,7 +177,7 @@ class RAGClassifier:
         self.cfg = _load_policy()
         th = self.cfg.get("thresholds") or {}
         self.allowed_ids: List[str] = self.cfg.get("regulations_allowed") or ALLOWED_FALLBACK
-        self.canon_map: Dict[str, str] = self.cfg.get("regulation_synonyms") or {}
+        self.canon_map: Dict[str, str] = _build_canon_map(self.cfg)
         self.min_conf = float(th.get("confidence_min", 0.55))
         self.min_sim = float(th.get("reg_evidence_min_sim", 0.50))
         self.max_regs = int(th.get("regulations_max", 1))
@@ -226,15 +279,28 @@ class RAGClassifier:
     def _rules_only(self, feature_text: str, hits: List[RegulationHit]) -> GeoDecision:
         d = GeoDecision(requires_geo_logic=None, reasoning="Rules-only fallback", confidence=0.5, regulations=[])
         d = apply_rule_overrides(feature_text, d)
-        d.regulations = canonicalize_regs(d.regulations, self.allowed_ids, self.canon_map)
+        d.regulations = _as_str_list(d.regulations)
+        allowed_scoped = self._scope_allowed(feature_text)
+        d.regulations = canonicalize_regs(d.regulations, allowed_scoped, self.canon_map)
 
         # Gate only if hits have usable reg_ids
         if any(h.reg_id for h in hits):
-            d = evidence_gate(d, hits, self.min_sim, self.allowed_ids)
+            allowed_scoped = self._scope_allowed(feature_text)
+
+            d = evidence_gate(
+                decision=d,
+                hits=hits,
+                min_sim=self.min_sim,
+                allowed=allowed_scoped,
+                canon_map=self.canon_map,
+                max_regs=self.max_regs,
+                tie_eps=self.tie_eps,
+                allow_fallback_when_empty=self._has_explicit_hook(feature_text),
+            )
         else:
             log.warning("GATE found no usable reg_id in hits; skipping drop in rules-only.")
 
-        if policy_abstain(feature_text, self.cfg):
+        if policy_abstain(feature_text, self.cfg) and d.requires_geo_logic is not False:
             d.requires_geo_logic = None
             d.regulations = []
         return d
@@ -243,19 +309,26 @@ class RAGClassifier:
         t = (text or "").lower()
         scope = set()
 
-        if re.search(r"\butah\b", t):
+        # State hooks
+        if re.search(r"\butah\b", t, re.I):
             scope.add("utah_social_media_regulation")
-        if re.search(r"\bflorida\b", t):
+        if re.search(r"\bflorida\b", t, re.I):
             scope.add("florida_online_protections")
-        if re.search(r"\bcalifornia|\bca\b", t):
+        # California
+        if re.search(r'\bcalifornia\b', t, re.I):
             scope.add("california_kids_act")
-        if re.search(r"\b(eu|eea|europe|dsa|vlop)\b", t):
+
+        # DSA must be explicit (not just EU/EEA rollout)
+        if re.search(r"\b(dsa|digital\s+services\s+act|vlop|very\s+large\s+online\s+platform|article\s?(16|17|28|34|39))\b", t, re.I):
             scope.add("dsa")
-        if re.search(r"\b(cs[ab]m|ncmec|cybertip(line)?|2258a|united states|us\b)", t):
+
+        # NCMEC only when CSAM/NCMEC/2258A is explicit
+        if re.search(r"\b(cs[ab]m|child\s+sexual\s+abuse|ncmec|cybertip(?:line)?|2258a)\b", t, re.I):
             scope.add("us_ncmec_reporting")
 
-        # If nothing matched, allow all (status quo)
-        return sorted(scope or self.allowed_ids)
+        if not scope and self._has_explicit_hook(text):
+            return self.allowed_ids[:]
+        return sorted(list({*(scope or self.allowed_ids)}))
 
     def _compact_evidence(self, hits, per_reg=1, max_total=3, snippet_len=120) -> str:
         # best hit per reg_id
@@ -272,6 +345,26 @@ class RAGClassifier:
         top = sorted(best.values(), key=lambda x: x.score, reverse=True)[:max_total]
         # super-compact tab-separated lines; VERY few tokens
         return "\n".join(f"{h.reg_id}\t{h.score:.3f}\t{h.snippet}" for h in top)
+    
+    def _has_explicit_hook(self, text: str) -> bool:
+        t = (text or "").lower()
+        in_utah    = re.search(r"\butah\b", t, re.I)
+        in_florida = re.search(r"\bflorida\b", t, re.I)
+        in_calif   = re.search(r'\bcalifornia\b', t, re.I)
+
+        has_minors   = re.search(r"\b(minor|teen|under\s?1[3-8]|13-1[6-9]|age[-\s]?gate|parental)\b", t, re.I)
+        has_pf       = re.search(r"\b(pf|personaliz(e|ation|ed)|recommend(er|ation)s?)\b", t, re.I)
+        has_controls = re.search(r"\b(parental|consent|age[-\s]?verify|verification|guardian|oversight|restrict|control)\b", t, re.I)
+        has_curfew   = re.search(r"\b(curfew|time[-\s]?limit|quiet\s*hours|login\s*block|shutdown)\b", t, re.I)
+        has_dsa      = re.search(r"\b(dsa|digital\s+services\s+act|vlop|very\s+large\s+online\s+platform|article\s?(16|17|28|34|39))\b", t, re.I)
+        has_csam     = re.search(r"\b(cs[ab]m|child\s+sexual\s+abuse|ncmec|cybertip(?:line)?|2258a)\b", t, re.I)
+
+        return bool(
+            has_csam or has_dsa or
+            (in_calif and has_minors and has_pf) or
+            (in_utah and has_minors and (has_curfew or has_controls)) or
+            (in_florida and has_minors and has_controls)
+        )
 
     # ---------- main ----------
 
@@ -297,18 +390,26 @@ class RAGClassifier:
                 confidence=0.99,
                 regulations=regs_fix or [],
             )
-            decision.regulations = canonicalize_regs(decision.regulations, self.allowed_ids, self.canon_map)
+            decision.regulations = _as_str_list(decision.regulations)
+            allowed_scoped = self._scope_allowed(feature_text)
+            decision.regulations = canonicalize_regs(decision.regulations, allowed_scoped, self.canon_map)
 
             if any(h.reg_id for h in reg_hits):
                 allowed_scoped = self._scope_allowed(feature_text)
                 decision = evidence_gate(
-                    decision, reg_hits, self.min_sim, allowed_scoped,
-                    self.canon_map, max_regs=self.max_regs, tie_eps=self.tie_eps
+                    decision=decision,
+                    hits=reg_hits,
+                    min_sim=self.min_sim,
+                    allowed=allowed_scoped,
+                    canon_map=self.canon_map,
+                    max_regs=self.max_regs,
+                    tie_eps=self.tie_eps,
+                    allow_fallback_when_empty=self._has_explicit_hook(feature_text),
                 )
             else:
                 log.warning("GATE found no usable reg_id in hits; skipping drop (feedback path).")
 
-            decision = _recalibrate_confidence(decision, reg_hits, self.canon_map)
+            decision = _recalibrate_confidence(decision, reg_hits, self.canon_map, self.min_sim)
             log.info("FINAL DECISION (feedback): %s", decision.model_dump())
             return decision.model_dump()
 
@@ -321,35 +422,46 @@ class RAGClassifier:
                 "evidence": evidence_text,
             })
             decision = self._parse_or_repair(raw)
+            decision.regulations = _as_str_list(decision.regulations)
         except Exception as e:
             log.exception("LLM path failed, using rules-only: %s", e)
             decision = self._rules_only(feature_text, reg_hits)
 
         # 5) Policy-driven post-processing
         decision = apply_rule_overrides(feature_text, decision)
-        decision.regulations = canonicalize_regs(decision.regulations, self.allowed_ids, self.canon_map)
+        allowed_scoped = self._scope_allowed(feature_text)
+        decision.regulations = canonicalize_regs(decision.regulations, allowed_scoped, self.canon_map)
         log.info("LLM regs (pre): %s", decision.regulations)
 
         if any(h.reg_id for h in reg_hits):
             allowed_scoped = self._scope_allowed(feature_text)            
+
             decision = evidence_gate(
-                decision, reg_hits, self.min_sim, allowed_scoped,
-                self.canon_map, max_regs=self.max_regs, tie_eps=self.tie_eps
+                decision=decision,
+                hits=reg_hits,
+                min_sim=self.min_sim,
+                allowed=allowed_scoped,
+                canon_map=self.canon_map,
+                max_regs=self.max_regs,
+                tie_eps=self.tie_eps,
+                allow_fallback_when_empty=self._has_explicit_hook(feature_text),
             )
         else:
             log.warning("GATE found no usable reg_id in hits; skipping drop to avoid nuking regs.")
         log.info("LLM regs (post gate): %s", decision.regulations)
 
         # Confidence calibration (prevents 1.0 everywhere)
-        decision = _recalibrate_confidence(decision, reg_hits, self.canon_map)
+        decision = _recalibrate_confidence(decision, reg_hits, self.canon_map, self.min_sim)
 
         # Abstain & min-confidence enforcement
-        if policy_abstain(feature_text, self.cfg):
+        if policy_abstain(feature_text, self.cfg) and decision.requires_geo_logic is not False:
             decision.requires_geo_logic = None
             decision.regulations = []
 
-        if decision.requires_geo_logic is not None and float(decision.confidence) < self.min_conf:
+        if decision.requires_geo_logic is True and float(decision.confidence) < self.min_conf:
             decision.requires_geo_logic = None
+            decision.regulations = []
+            decision.confidence = min(float(decision.confidence or 0.0), 0.40)
 
         log.info("FINAL DECISION: %s", decision.model_dump())
         return decision.model_dump()
