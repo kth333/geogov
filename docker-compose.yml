@@ -1,0 +1,92 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    volumes:
+      - ollama:/root/.ollama
+    entrypoint: ["/bin/sh","-lc",
+      "until curl -fsS http://ollama:11434/api/version >/dev/null; do sleep 1; done; \
+       ollama pull llama3"
+    ]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  retriever:
+    build:
+      context: ./services/retriever
+    env_file: .env
+    environment:
+      - AUTO_SEED=1
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - ./services/retriever/retriever:/app/retriever
+      - ./data:/app/data
+    depends_on:
+      - qdrant
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+
+  classifier:
+    build:
+      context: ./services/classifier
+    env_file: .env
+    environment:
+      - MODEL_NAME=llama3
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - ./services/classifier/classifier:/app/classifier
+      - ./data:/app/data
+    depends_on:
+      - retriever
+      - ollama
+      - ollama-init
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./services/gateway
+    env_file: .env
+    volumes:
+      - ./services/gateway/gateway:/app/gateway
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+    depends_on:
+      - classifier
+      - retriever
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    environment:
+      - CLASSIFIER_URL=http://classifier:8000
+      - CLASSIFIER_TIMEOUT=240
+      - CLASSIFIER_CONNECT_TIMEOUT=10
+      - CLASSIFIER_WRITE_TIMEOUT=60
+      - RETRIEVER_URL=http://retriever:8000
+      - RETRIEVER_TIMEOUT=600
+      - RETRIEVER_CONNECT_TIMEOUT=10
+      - RETRIEVER_WRITE_TIMEOUT=120
+
+volumes:
+  qdrant_data:
+  ollama:

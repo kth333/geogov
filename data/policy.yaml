@@ -1,0 +1,70 @@
+mode: evaluation_focus   # evaluation_focus | open_world
+
+retrieval:
+  collection: regs
+  top_k: 10
+
+regulations_allowed:
+  - dsa
+  - california_kids_act
+  - florida_online_protections
+  - utah_social_media_regulation
+  - us_ncmec_reporting
+
+thresholds:
+  confidence_min: 0.70
+  reg_evidence_min_sim: 0.30
+
+abstain_patterns:
+  ambiguous_geo:
+    - "(?i)(global(ly)?|worldwide).*(except|minus).*\\bKR\\b"
+    - "(?i)(except|minus).*\\bKR\\b.*(global(ly)?|worldwide)"
+
+business_only_hints:
+  - "(?i)A/B"
+  - "(?i)experiment"
+  - "(?i)market testing"
+  - "(?i)staged rollout"
+  - "(?i)holdback"
+  - "(?i)feature flag"
+  - "(?i)geo-?fence(s|d)?"
+
+minors_hints:
+  - "(?i)minor(s)?"
+  - "(?i)teen(ager)?s?"
+  - '\b13-1[6-9]\b'
+  - '\bunder\s*1[6-8]\b'
+  - '\bage\s*gates?\b'
+  - '\bparental\b'
+
+pf_hints:
+  - "(?i)personal(ized|isation|ization)"
+  - "(?i)recommend(ation|er)s?"
+  - "(?i)\\bPF\\b"
+
+csam_hints:
+  - '\bcsam\b'
+  - 'child sexual abuse'
+  - '\bncmec\b'
+  - '\breport(ing)?\s+requirement(s)?\b'
+
+synonyms:
+  dsa:
+    - dsa
+    - eu digital services act
+    - digital services act
+  california_kids_act:
+    - california kids act
+    - sb 976
+    - sb976
+  florida_online_protections:
+    - florida online protections
+    - florida online protections for minors
+  utah_social_media_regulation:
+    - utah social media regulation act
+    - utah social media act
+  us_ncmec_reporting:
+    - us ncmec reporting
+    - ncmec
+    - cybertipline
+    - csam reporting
