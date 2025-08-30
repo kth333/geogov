@@ -73,14 +73,16 @@ def main():
         with open(fp, "r", encoding="utf-8") as f:
             text = f.read().strip()
         vec = embed.embed_query(text)
+
+        stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"geogov:{reg_id}"))
+
         points.append(
             PointStruct(
-                id=str(uuid.uuid4()),
+                id=stable_id,
                 vector=vec,
-                payload={"text": text, "metadata": {"reg_id": reg_id}},
+                payload={"text": text, "reg_id": reg_id},
             )
         )
-
     if points:
         client.upsert(collection_name=collection, points=points)
         print(f"Upserted {len(points)} regulation docs into {collection}")

@@ -56,7 +56,7 @@ Supported regulation families (focused for the hackathon brief):
 3. **Rule assists**: Deterministic nudges for explicit triggers (e.g., “NCMEC”, “California + teens + PF”).
 4. **Evidence gate**: Keep a regulation only if it’s **allowed** *and* **retrieved** with enough similarity.
 5. **Policy abstain**: Mark **null** for ambiguous geo mentions with no legal signals.
-6. **Audit**: Log Qdrant hits + final decision; batch runner emits CSV for records.
+6. **Audit**: Store feedback in SQLite; batch runner emits CSV for records.
 
 *Everything runs locally via Docker; no user data leaves the machine.*
 
@@ -100,7 +100,18 @@ DEBUG=1
 docker compose up -d --build
 ```
 
-3) Single screening (HTTP)
+4) Seed retrieval (first run or when regs change)
+```bash
+docker compose exec retriever python -m retriever.seed
+```
+
+5) Try the UI
+
+Open http://localhost:8001/static/index.html
+
+Paste a feature → Run → (optionally) Send feedback
+
+6) Single screening (HTTP)
 ```bash
 curl -s http://localhost:8001/infer \
   -H "content-type: application/json" \
@@ -109,7 +120,7 @@ curl -s http://localhost:8001/infer \
        "docs":[]}'
 ```
 
-4) Batch screening (CSV -> CSV)
+7) Batch screening (CSV -> CSV)
 ```bash
 docker compose exec gateway \
   python -m gateway.batch \
@@ -122,14 +133,45 @@ docker compose exec gateway \
 
 ---
 
+## Feedback & audit
+
+* **POST /feedback** (Classifier)
+
+```bash
+curl -s http://localhost:8000/feedback \
+  -H "content-type: application/json" \
+  -d '{
+    "feature_id":"feat-123",
+    "title":"PF default toggle with NR enforcement for California teens",
+    "description":"…",
+    "docs":[],
+    "requires_geo_logic": true,
+    "regulations": ["california_kids_act"],
+    "comment":"This is indeed CA minors + PF default off.",
+    "user":"reviewerA"
+  }'
+```
+
+* Feedback is stored in **`/app/outputs/audit.db`** (SQLite) inside the classifier container.
+* Inspect it:
+
+```bash
+docker compose exec classifier sqlite3 /app/outputs/audit.db \
+  ".schema feedback" \
+  "SELECT ts, feature_id, requires_geo_logic, regulations_json, user FROM feedback ORDER BY ts DESC LIMIT 5;"
+```
+
+---
+
 ## Features & functionality
 
 * **RAG core:** Qdrant + HF embeddings to ground the LLM with targeted regulation notes.
-* **Deterministic rule assists:** Explicit cues (NCMEC, “California + teens + PF”) set conservative defaults.
+* **Deterministic rule assists:** Explicit cues (NCMEC, “California + teens + PF”).
 * **Evidence gating:** Regulations are kept only when retrieved with similarity + allowed by policy.
-* **Ambiguity handling:** Returns `null` for inputs without legal intent and need human evaluation.
-* **Canonicalization:** Normalizes free-form mentions (e.g., “EU DSA”, “Digital Services Act”) to `dsa`.
-* **Auditability:** Logs Qdrant hits and final JSON; batch runner produces a signed-off CSV artifact.
+* **Ambiguity handling:** Returns `null` for inputs without legal intent and needing human evaluation.
+* **Canonicalization:** Normalizes free-form mentions to the canonical `reg_id`s.
+* **Auditability & feedback:** `/feedback` endpoint writes to SQLite; UI includes a simple feedback flow.
+* **Batch mode:** One-shot CSV screenings for large lists of features.
 
 ---
 
@@ -142,9 +184,9 @@ docker compose exec gateway \
 
 ## APIs used
 
-* **Local REST**: `/health`, `/infer` (FastAPI)
-* **Qdrant**: vector search (via `qdrant-client` and `langchain-qdrant`)
-* **Ollama**: local LLM inference (via `langchain_community.chat_models.ChatOllama`)
+* **Classifier (FastAPI):** `/health`, `/infer`, `/feedback`
+* **Qdrant:** vector search (`qdrant-client`, `langchain-qdrant`)
+* **Ollama**: local LLM inference (`langchain_community.chat_models.ChatOllama`)
 
 ## Libraries used
 
@@ -163,8 +205,8 @@ docker compose exec gateway \
 ## Mapping to the challenge
 
 * **Boosting LLM precision:** RAG + canonicalization + evidence gating reduce hallucinations.
-* **Full automation:** Batch runner + policy file + local stack = hands-off first pass; logs enable human-in-the-loop escalation.
-* **Alternative detection:** (Future work) static/runtime analysis hooks could enrich signals, but out of scope per brief.
+* **Full automation:** Batch runner + policy file + local stack = hands-off first pass; feedback + SQLite enable human-in-the-loop and future self-evolution.
+* **User journey:** UI for screening and feedback; APIs for bulk and automation.
 
 ---
 

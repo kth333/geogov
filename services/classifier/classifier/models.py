@@ -21,4 +21,4 @@ class InferenceResponse(BaseModel):
     requires_geo_logic: Optional[bool]
     reasoning: str
     confidence: float
-    regulations: List[RegulationHit]
+    regulations: List[str]

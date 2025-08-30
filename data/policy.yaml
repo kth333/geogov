@@ -12,8 +12,8 @@ regulations_allowed:
   - us_ncmec_reporting
 
 thresholds:
-  confidence_min: 0.70
-  reg_evidence_min_sim: 0.30
+  confidence_min: 0.60
+  reg_evidence_min_sim: 0.10
 
 abstain_patterns:
   ambiguous_geo:

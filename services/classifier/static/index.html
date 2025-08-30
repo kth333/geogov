@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>GeoGov Checker</title>
+  <script>
+    async function infer() {
+      const feature_id = document.getElementById('feature_id').value.trim() || null;
+      const title = document.getElementById('title').value.trim();
+      const description = document.getElementById('description').value.trim();
+      const docsRaw = document.getElementById('docs').value;
+      const docs = docsRaw.split('\n').map(x=>x.trim()).filter(Boolean);
+
+      const body = { feature_id, title, description, docs };
+      setJSON('infer_out', { loading: true, body });
+
+      const res = await fetch('/infer', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      setJSON('infer_out', data);
+
+      // Pre-fill feedback fields from model output
+      document.getElementById('fb_requires').value =
+        data.requires_geo_logic === null ? '' : String(data.requires_geo_logic);
+      document.getElementById('fb_regs').value = (data.regulations || []).join(',');
+    }
+
+    async function submitFeedback() {
+      const payload = {
+        feature_id: document.getElementById('feature_id').value.trim() || "",
+        title: document.getElementById('title').value.trim(),
+        description: document.getElementById('description').value.trim(),
+        docs: document.getElementById('docs').value.split('\n').map(x=>x.trim()).filter(Boolean),
+        requires_geo_logic: parseRequires(document.getElementById('fb_requires').value),
+        regulations: parseRegs(document.getElementById('fb_regs').value),
+        comment: document.getElementById('fb_comment').value.trim(),
+        user: document.getElementById('fb_user').value.trim() || "anon"
+      };
+      const res = await fetch('/feedback', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      alert(data.ok ? 'Saved!' : JSON.stringify(data));
+      loadRecent();
+    }
+
+    function parseRequires(v) {
+      if (v === '' || v === 'null') return null;
+      return v.toLowerCase() === 'true';
+    }
+    function parseRegs(v) {
+      if (!v.trim()) return [];
+      return v.split(',').map(x=>x.trim()).filter(Boolean);
+    }
+    function setJSON(id, obj) {
+      document.getElementById(id).textContent = JSON.stringify(obj, null, 2);
+    }
+    async function loadRecent() {
+      const res = await fetch('/audit/recent?limit=10');
+      const { items } = await res.json();
+      const tbody = document.getElementById('recent_tbody');
+      tbody.innerHTML = '';
+      for (const it of items) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${new Date(it.ts*1000).toLocaleString()}</td>
+          <td>${escapeHtml(it.feature_id)}</td>
+          <td>${it.requires_geo_logic}</td>
+          <td>${escapeHtml((it.regulations||[]).join(','))}</td>
+          <td>${escapeHtml(it.comment||'')}</td>
+          <td>${escapeHtml(it.user||'')}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+    function escapeHtml(s) {
+      return (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+    window.addEventListener('DOMContentLoaded', loadRecent);
+  </script>
+  <style>
+    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 16px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+    textarea, input[type=text] { width: 100%; padding: 8px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
+    .actions { display: flex; gap: 8px; }
+    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #999; cursor:pointer; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-top: 1px solid #eee; padding: 6px 8px; text-align:left; }
+    code { white-space: pre-wrap; display:block; background:#fafafa; border:1px solid #eee; border-radius:8px; padding:10px; }
+    .muted { color:#666; }
+  </style>
+</head>
+<body>
+  <h1>GeoGov Checker</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Feature</h3>
+      <label>Feature ID (optional)</label>
+      <input id="feature_id" type="text" placeholder="e.g. 2"/>
+
+      <label>Title</label>
+      <input id="title" type="text" placeholder="Short title"/>
+
+      <label>Description</label>
+      <textarea id="description" rows="6" placeholder="Longer description..."></textarea>
+
+      <label>Docs (one per line)</label>
+      <textarea id="docs" rows="5" placeholder="Paste extra context per line..."></textarea>
+
+      <div class="actions">
+        <button onclick="infer()">Run /infer</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Model Output</h3>
+      <code id="infer_out" class="muted">{}</code>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:16px;">
+    <div class="card">
+      <h3>Human Feedback</h3>
+      <label>requires_geo_logic</label>
+      <input id="fb_requires" type="text" placeholder="true | false | null"/>
+
+      <label>regulations (comma separated)</label>
+      <input id="fb_regs" type="text" placeholder="e.g. dsa, california_kids_act"/>
+
+      <label>Comment</label>
+      <input id="fb_comment" type="text" placeholder="Why? (for audit)"/>
+
+      <label>User</label>
+      <input id="fb_user" type="text" placeholder="your name or handle"/>
+
+      <div class="actions">
+        <button onclick="submitFeedback()">Submit /feedback</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Recent Feedback</h3>
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Feature ID</th><th>Req. Geo</th><th>Regulations</th><th>Comment</th><th>User</th></tr>
+        </thead>
+        <tbody id="recent_tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

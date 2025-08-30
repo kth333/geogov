@@ -55,6 +55,7 @@ services:
     volumes:
       - ./services/classifier/classifier:/app/classifier
       - ./data:/app/data
+      - ./outputs:/app/outputs
     depends_on:
       - retriever
       - ollama

@@ -4,8 +4,9 @@ from langchain_core.output_parsers import PydanticOutputParser
 
 PROMPT_TMPL = """You are a compliance triage assistant.
 
-Return ONLY valid JSON matching this schema:
+Return ONLY a single JSON object matching this schema:
 {format_instructions}
+No prose, no markdown, no code fences, no backticks, no lists/arrays at the top level.
 
 Inputs:
 - Feature Title: {title}
@@ -35,9 +36,9 @@ def build_prompt(allowed_ids, parser: PydanticOutputParser) -> ChatPromptTemplat
     )
 
 def format_evidence(reg_hits) -> str:
-    """Render retrieved hits into the same evidence string the old chain produced."""
     lines = []
     for h in reg_hits:
-        # h has fields: reg_id, snippet, score (already similarity 0..1)
-        lines.append(f"[{h.reg_id or '-'} | score={h.score:.3f}] { (h.snippet or '')[:500] }")
-    return "\n\n".join(lines)
+        rid = h.reg_id or "<missing>"
+        snip = (h.snippet or "").replace("\n", " ").strip()[:500]
+        lines.append(f"[{rid} | score={h.score:.3f}] {snip}")
+    return "\n\n".join(lines) or "(no retrieval evidence)"
