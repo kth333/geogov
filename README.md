@@ -122,10 +122,7 @@ curl -s http://localhost:8001/infer \
 
 7) Batch screening (CSV -> CSV)
 ```bash
-docker compose exec gateway \
-  python -m gateway.batch \
-  --input /app/data/sample_dataset.csv \
-  --output /app/outputs/run_outputs.csv
+docker compose exec gateway python -m gateway.batch --input /app/data/sample_dataset.csv --output /app/outputs/run_outputs.csv
 
 ```
 **Input CSV format:** `id,title,description,doc`
