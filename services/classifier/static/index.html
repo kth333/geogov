@@ -1,158 +1,492 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>GeoGov Checker</title>
-  <script>
-    async function infer() {
-      const feature_id = document.getElementById('feature_id').value.trim() || null;
-      const title = document.getElementById('title').value.trim();
-      const description = document.getElementById('description').value.trim();
-      const docsRaw = document.getElementById('docs').value;
-      const docs = docsRaw.split('\n').map(x=>x.trim()).filter(Boolean);
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>GeoGov Checker</title>
+    <!-- TailwindCSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React + ReactDOM (UMD) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX in-browser (fine for demo/pitch) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      /* Smooth font rendering for the demo */
+      :root { color-scheme: light dark; }
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    </style>
+  </head>
+  <body class="bg-gradient-to-b from-white to-slate-50 text-slate-900 dark:from-slate-900 dark:to-slate-950 dark:text-slate-100">
+    <div id="root"></div>
 
-      const body = { feature_id, title, description, docs };
-      setJSON('infer_out', { loading: true, body });
+    <!-- App Code -->
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
 
-      const res = await fetch('/infer', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      setJSON('infer_out', data);
+      function GeoGovApp() {
+        // Feature form
+        const [featureId, setFeatureId] = useState("");
+        const [title, setTitle] = useState("");
+        const [description, setDescription] = useState("");
+        const [docsText, setDocsText] = useState("");
 
-      // Pre-fill feedback fields from model output
-      document.getElementById('fb_requires').value =
-        data.requires_geo_logic === null ? '' : String(data.requires_geo_logic);
-      document.getElementById('fb_regs').value = (data.regulations || []).join(',');
-    }
+        // Model output
+        const [inferOut, setInferOut] = useState({});
+        const [inferring, setInferring] = useState(false);
 
-    async function submitFeedback() {
-      const payload = {
-        feature_id: document.getElementById('feature_id').value.trim() || "",
-        title: document.getElementById('title').value.trim(),
-        description: document.getElementById('description').value.trim(),
-        docs: document.getElementById('docs').value.split('\n').map(x=>x.trim()).filter(Boolean),
-        requires_geo_logic: parseRequires(document.getElementById('fb_requires').value),
-        regulations: parseRegs(document.getElementById('fb_regs').value),
-        comment: document.getElementById('fb_comment').value.trim(),
-        user: document.getElementById('fb_user').value.trim() || "anon"
-      };
-      const res = await fetch('/feedback', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      alert(data.ok ? 'Saved!' : JSON.stringify(data));
-      loadRecent();
-    }
+        // Feedback form
+        const [fbRequires, setFbRequires] = useState(""); // true | false | null
+        const [fbRegs, setFbRegs] = useState(""); // comma separated
+        const [fbComment, setFbComment] = useState("");
+        const [fbUser, setFbUser] = useState("");
+        const [submitting, setSubmitting] = useState(false);
 
-    function parseRequires(v) {
-      if (v === '' || v === 'null') return null;
-      return v.toLowerCase() === 'true';
-    }
-    function parseRegs(v) {
-      if (!v.trim()) return [];
-      return v.split(',').map(x=>x.trim()).filter(Boolean);
-    }
-    function setJSON(id, obj) {
-      document.getElementById(id).textContent = JSON.stringify(obj, null, 2);
-    }
-    async function loadRecent() {
-      const res = await fetch('/audit/recent?limit=10');
-      const { items } = await res.json();
-      const tbody = document.getElementById('recent_tbody');
-      tbody.innerHTML = '';
-      for (const it of items) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${new Date(it.ts*1000).toLocaleString()}</td>
-          <td>${escapeHtml(it.feature_id)}</td>
-          <td>${it.requires_geo_logic}</td>
-          <td>${escapeHtml((it.regulations||[]).join(','))}</td>
-          <td>${escapeHtml(it.comment||'')}</td>
-          <td>${escapeHtml(it.user||'')}</td>`;
-        tbody.appendChild(tr);
+        // Recent feedback
+        const [recent, setRecent] = useState([]);
+        const [loadingRecent, setLoadingRecent] = useState(true);
+        const [error, setError] = useState(null);
+
+        const docs = useMemo(
+          () => docsText.split("\\n").map((x) => x.trim()).filter(Boolean),
+          [docsText]
+        );
+
+        async function runInfer() {
+          setInferring(true);
+          setError(null);
+          const body = {
+            feature_id: featureId.trim() || null,
+            title: title.trim(),
+            description: description.trim(),
+            docs,
+          };
+          try {
+            setInferOut({ loading: true, body });
+            const res = await fetch("/infer", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(`/infer failed: ${res.status}`);
+            const data = await res.json();
+            setInferOut(data);
+            // pre-fill feedback
+            const rgl = data && typeof data.requires_geo_logic !== "undefined" ? String(data.requires_geo_logic) : "";
+            setFbRequires(rgl);
+            setFbRegs(((data && data.regulations) || []).join(","));
+          } catch (e) {
+            setError(e && e.message ? e.message : String(e));
+          } finally {
+            setInferring(false);
+          }
+        }
+
+        function parseRequires(v) {
+          const t = (v || "").trim().toLowerCase();
+          if (t === "" || t === "null") return null;
+          if (t === "true") return true;
+          if (t === "false") return false;
+          return null;
+        }
+
+        function parseRegs(v) {
+          return (v || "").split(",").map((x) => x.trim()).filter(Boolean);
+        }
+
+        async function submitFeedback() {
+          setSubmitting(true);
+          setError(null);
+          const payload = {
+            feature_id: featureId.trim() || "",
+            title: title.trim(),
+            description: description.trim(),
+            docs,
+            requires_geo_logic: parseRequires(fbRequires),
+            regulations: parseRegs(fbRegs),
+            comment: fbComment.trim(),
+            user: fbUser.trim() || "anon",
+          };
+          try {
+            const res = await fetch("/feedback", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const data = await res.json();
+            if (!data || data.ok !== true) throw new Error(JSON.stringify(data));
+            toast("Feedback saved");
+            await loadRecent();
+          } catch (e) {
+            setError(e && e.message ? e.message : String(e));
+          } finally {
+            setSubmitting(false);
+          }
+        }
+
+        async function loadRecent() {
+          setLoadingRecent(true);
+          setError(null);
+          try {
+            const res = await fetch("/audit/recent?limit=10");
+            if (!res.ok) throw new Error(`/audit/recent failed: ${res.status}`);
+            const { items } = await res.json();
+            setRecent(Array.isArray(items) ? items : []);
+          } catch (e) {
+            setError(e && e.message ? e.message : String(e));
+          } finally {
+            setLoadingRecent(false);
+          }
+        }
+
+        useEffect(() => { loadRecent(); }, []);
+
+        return (
+          <div className="min-h-screen">
+            <Header />
+
+            <main className="mx-auto w-full max-w-7xl px-4 pb-24">
+              {error && (
+                <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+                  {error}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <Card title="Feature" subtitle="Describe what you’re checking. These inputs are sent to /infer">
+                  <Field label="Feature ID (optional)">
+                    <input
+                      value={featureId}
+                      onChange={(e) => setFeatureId(e.target.value)}
+                      className={inputCls}
+                      placeholder="e.g. 2"
+                    />
+                  </Field>
+                  <Field label="Title">
+                    <input
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      className={inputCls}
+                      placeholder="Short title"
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <textarea
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className={textareaCls}
+                      rows={6}
+                      placeholder="Longer description..."
+                    />
+                  </Field>
+                  <Field label="Docs (one per line)">
+                    <textarea
+                      value={docsText}
+                      onChange={(e) => setDocsText(e.target.value)}
+                      className={textareaCls}
+                      rows={5}
+                      placeholder="Paste extra context per line..."
+                    />
+                  </Field>
+                  <div className="flex items-center gap-3 pt-2">
+                    <Button onClick={runInfer} loading={inferring} icon="⚙️">
+                      Run /infer
+                    </Button>
+                    <QuickStat label="Docs" value={docs.length} />
+                  </div>
+                </Card>
+
+                <Card
+                  title="Model Output"
+                  subtitle="Structured JSON response from /infer. Copy or tweak before submitting feedback."
+                  right={<CopyJSON data={inferOut} />}
+                >
+                  <pre className="block max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-relaxed dark:border-slate-800 dark:bg-slate-900">
+                    {pretty(inferOut)}
+                  </pre>
+                </Card>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
+                <Card title="Human Feedback" subtitle="Ground the decision with expert input. This posts to /feedback">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <Field label="requires_geo_logic">
+                      <input
+                        value={fbRequires}
+                        onChange={(e) => setFbRequires(e.target.value)}
+                        className={inputCls}
+                        placeholder="true | false | null"
+                      />
+                    </Field>
+                    <Field label="regulations (comma separated)">
+                      <input
+                        value={fbRegs}
+                        onChange={(e) => setFbRegs(e.target.value)}
+                        className={inputCls}
+                        placeholder="e.g. dsa, california_kids_act"
+                      />
+                    </Field>
+                  </div>
+
+                  <Field label="Comment">
+                    <input
+                      value={fbComment}
+                      onChange={(e) => setFbComment(e.target.value)}
+                      className={inputCls}
+                      placeholder="Why? (for audit)"
+                    />
+                  </Field>
+                  <Field label="User">
+                    <input
+                      value={fbUser}
+                      onChange={(e) => setFbUser(e.target.value)}
+                      className={inputCls}
+                      placeholder="your name or handle"
+                    />
+                  </Field>
+
+                  <div className="flex items-center gap-3 pt-2">
+                    <Button onClick={submitFeedback} loading={submitting} icon="💾">
+                      Submit /feedback
+                    </Button>
+                    <span className="text-xs text-slate-500">Posting sends your inputs and the decision back to the audit log.</span>
+                  </div>
+                </Card>
+
+                <Card
+                  title="Recent Feedback"
+                  subtitle="Latest human decisions captured for auditability"
+                  right={<Refresh onClick={loadRecent} loading={loadingRecent} />}
+                >
+                  <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
+                        <tr>
+                          <Th>Time</Th>
+                          <Th>Feature ID</Th>
+                          <Th>Req. Geo</Th>
+                          <Th>Regulations</Th>
+                          <Th>Comment</Th>
+                          <Th>User</Th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {loadingRecent && SkeletonRows(5)}
+                        {!loadingRecent && recent.length === 0 && (
+                          <tr>
+                            <td colSpan="6" className="p-4 text-center text-slate-500">
+                              No feedback yet.
+                            </td>
+                          </tr>
+                        )}
+                        {!loadingRecent &&
+                          recent.map((it, i) => (
+                            <tr
+                              key={`${it.ts}-${i}`}
+                              className="border-t border-slate-100 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900/40"
+                            >
+                              <Td>{new Date(it.ts * 1000).toLocaleString()}</Td>
+                              <Td>{escapeHtml(it.feature_id)}</Td>
+                              <Td>{String(it.requires_geo_logic)}</Td>
+                              <Td>{escapeHtml(((it.regulations || []).join(",")))}</Td>
+                              <Td>{escapeHtml(it.comment || "")}</Td>
+                              <Td>{escapeHtml(it.user || "")}</Td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+            </main>
+
+            <Footer />
+          </div>
+        );
       }
-    }
-    function escapeHtml(s) {
-      return (s||'').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    }
-    window.addEventListener('DOMContentLoaded', loadRecent);
-  </script>
-  <style>
-    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-    h1 { margin: 0 0 16px; }
-    .grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
-    textarea, input[type=text] { width: 100%; padding: 8px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
-    .actions { display: flex; gap: 8px; }
-    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #999; cursor:pointer; }
-    table { width:100%; border-collapse: collapse; }
-    th, td { border-top: 1px solid #eee; padding: 6px 8px; text-align:left; }
-    code { white-space: pre-wrap; display:block; background:#fafafa; border:1px solid #eee; border-radius:8px; padding:10px; }
-    .muted { color:#666; }
-  </style>
-</head>
-<body>
-  <h1>GeoGov Checker</h1>
 
-  <div class="grid">
-    <div class="card">
-      <h3>Feature</h3>
-      <label>Feature ID (optional)</label>
-      <input id="feature_id" type="text" placeholder="e.g. 2"/>
+      // ------------------------- UI BUILDING BLOCKS -------------------------
+      const inputBase =
+        "w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-950/50 dark:focus:border-slate-400 dark:focus:ring-slate-800";
+      const inputCls = inputBase;
+      const textareaCls = inputBase + " min-h-[80px]";
 
-      <label>Title</label>
-      <input id="title" type="text" placeholder="Short title"/>
+      function Card({ title, subtitle, right, children }) {
+        return (
+          <section className="rounded-2xl border border-slate-200 bg-white/70 p-5 shadow-sm backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/60">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
+                {subtitle && (
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{subtitle}</p>
+                )}
+              </div>
+              {right}
+            </div>
+            {children}
+          </section>
+        );
+      }
 
-      <label>Description</label>
-      <textarea id="description" rows="6" placeholder="Longer description..."></textarea>
+      function Field({ label, children }) {
+        return (
+          <label className="block">
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300">
+              {label}
+            </div>
+            {children}
+          </label>
+        );
+      }
 
-      <label>Docs (one per line)</label>
-      <textarea id="docs" rows="5" placeholder="Paste extra context per line..."></textarea>
+      function Button({ icon, loading, onClick, children }) {
+        return (
+          <button
+            onClick={onClick}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-100 dark:text-slate-900"
+          >
+            {loading ? (
+              <span className="inline-flex items-center gap-2"><Spinner /> Working…</span>
+            ) : (
+              <>
+                {icon && <span>{icon}</span>}
+                <span>{children}</span>
+              </>
+            )}
+          </button>
+        );
+      }
 
-      <div class="actions">
-        <button onclick="infer()">Run /infer</button>
-      </div>
-    </div>
+      function Refresh({ loading, onClick }) {
+        return (
+          <button
+            onClick={onClick}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900"
+          >
+            {loading ? (
+              <span className="inline-flex items-center gap-2"><Spinner /> Refreshing…</span>
+            ) : (
+              <span className="inline-flex items-center gap-2">↻ Refresh</span>
+            )}
+          </button>
+        );
+      }
 
-    <div class="card">
-      <h3>Model Output</h3>
-      <code id="infer_out" class="muted">{}</code>
-    </div>
-  </div>
+      function Spinner() {
+        return (
+          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+          </svg>
+        );
+      }
 
-  <div class="grid" style="margin-top:16px;">
-    <div class="card">
-      <h3>Human Feedback</h3>
-      <label>requires_geo_logic</label>
-      <input id="fb_requires" type="text" placeholder="true | false | null"/>
+      function QuickStat({ label, value }) {
+        return (
+          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+            <div className="font-semibold">{value}</div>
+            <div className="uppercase tracking-wide">{label}</div>
+          </div>
+        );
+      }
 
-      <label>regulations (comma separated)</label>
-      <input id="fb_regs" type="text" placeholder="e.g. dsa, california_kids_act"/>
+      function Th({ children }) { return <th className="px-3 py-2 text-left">{children}</th>; }
+      function Td({ children }) { return <td className="px-3 py-2 align-top">{children}</td>; }
 
-      <label>Comment</label>
-      <input id="fb_comment" type="text" placeholder="Why? (for audit)"/>
+      function SkeletonRows(n = 5) {
+        return Array.from({ length: n }).map((_, i) => (
+          <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
+            {Array.from({ length: 6 }).map((__, j) => (
+              <td key={j} className="px-3 py-3">
+                <div className="h-4 w-full animate-pulse rounded bg-slate-200/70 dark:bg-slate-800/70" />
+              </td>
+            ))}
+          </tr>
+        ));
+      }
 
-      <label>User</label>
-      <input id="fb_user" type="text" placeholder="your name or handle"/>
+      function CopyJSON({ data }) {
+        const text = useMemo(() => pretty(data), [data]);
+        async function copy() {
+          try {
+            await navigator.clipboard.writeText(text);
+            toast("JSON copied");
+          } catch {
+            toast("Copy failed");
+          }
+        }
+        return (
+          <button
+            onClick={copy}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900"
+          >
+            ⧉ Copy JSON
+          </button>
+        );
+      }
 
-      <div class="actions">
-        <button onclick="submitFeedback()">Submit /feedback</button>
-      </div>
-    </div>
+      function Header() {
+        return (
+          <header className="sticky top-0 z-10 mb-6 border-b border-slate-200 bg-white/70 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/60">
+            <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm dark:bg-slate-100 dark:text-slate-900">
+                  G
+                </div>
+                <div>
+                  <h1 className="text-base font-semibold leading-tight">GeoGov Checker</h1>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Compliance inference & human-in-the-loop feedback</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <kbd className="rounded-md border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-950">/infer</kbd>
+                <kbd className="rounded-md border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-950">/feedback</kbd>
+                <kbd className="rounded-md border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-950">/audit/recent</kbd>
+              </div>
+            </div>
+          </header>
+        );
+      }
 
-    <div class="card">
-      <h3>Recent Feedback</h3>
-      <table>
-        <thead>
-          <tr><th>Time</th><th>Feature ID</th><th>Req. Geo</th><th>Regulations</th><th>Comment</th><th>User</th></tr>
-        </thead>
-        <tbody id="recent_tbody"></tbody>
-      </table>
-    </div>
-  </div>
-</body>
+      function Footer() {
+        return (
+          <footer className="mt-10 border-t border-slate-200 py-6 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            Built for demo & pitching. Secure by design—no secrets in the client.
+          </footer>
+        );
+      }
+
+      // ------------------------- helpers -------------------------
+      function pretty(obj) {
+        try { return JSON.stringify(obj ?? {}, null, 2); } catch { return String(obj); }
+      }
+
+      function escapeHtml(s) {
+        const str = String(s ?? "");
+        return str.replace(/[&<>\"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+      }
+
+      function toast(msg) {
+        // lightweight toast – no dependency
+        const id = `t-${Math.random().toString(36).slice(2)}`;
+        const el = document.createElement("div");
+        el.id = id;
+        el.className =
+          "fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm shadow-lg dark:border-slate-700 dark:bg-slate-900";
+        el.textContent = msg;
+        document.body.appendChild(el);
+        setTimeout(() => {
+          el.style.opacity = "0";
+          el.style.transition = "opacity .3s ease";
+          setTimeout(() => el.remove(), 300);
+        }, 1400);
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<GeoGovApp />);
+    </script>
+  </body>
 </html>
