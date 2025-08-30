@@ -80,7 +80,12 @@ def main():
             PointStruct(
                 id=stable_id,
                 vector=vec,
-                payload={"text": text, "reg_id": reg_id},
+                payload={
+                    "text": text,                # used as page_content
+                    "metadata": {                # used as Document.metadata
+                        "reg_id": reg_id
+                    }
+                }
             )
         )
     if points:
