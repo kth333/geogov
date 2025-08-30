@@ -15,7 +15,7 @@ services:
       - ollama:/root/.ollama
     entrypoint: ["/bin/sh","-lc",
       "until curl -fsS http://ollama:11434/api/version >/dev/null; do sleep 1; done; \
-       ollama pull llama3"
+       ollama pull qwen2.5:3b-instruct"
     ]
 
   qdrant:
@@ -48,7 +48,7 @@ services:
       context: ./services/classifier
     env_file: .env
     environment:
-      - MODEL_NAME=llama3
+      - MODEL_NAME=qwen2.5:3b-instruct
       - OLLAMA_BASE_URL=http://ollama:11434
       - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
       - QDRANT_URL=http://qdrant:6333

@@ -20,7 +20,7 @@ def to_similarity(distance_or_score: float, score_is_distance: bool = True) -> f
     # already similarity
     return max(0.0, min(1.0, s))
 
-def build_reg_hits(scored, score_is_distance: bool = True) -> List[RegulationHit]:
+def build_reg_hits(scored, score_is_distance: bool = True, snippet_len: int = 160) -> List[RegulationHit]:
     """
     Build hits from Qdrant results, using ONLY reg_id in payload.
     Be robust to reg_id being nested or absent:
@@ -28,7 +28,6 @@ def build_reg_hits(scored, score_is_distance: bool = True) -> List[RegulationHit
       - doc.metadata['metadata']['reg_id']
       - doc.metadata['id']
     """
-def build_reg_hits(scored, score_is_distance: bool = True) -> List[RegulationHit]:
     hits = []
     for doc, score in scored:
         md = getattr(doc, "metadata", {}) or {}
@@ -44,7 +43,7 @@ def build_reg_hits(scored, score_is_distance: bool = True) -> List[RegulationHit
             or md.get("text")
             or md.get("snippet")
             or ""
-        )[:500]
+        )[:snippet_len]
         hits.append(RegulationHit(
             reg_id=rid,
             snippet=snippet,
@@ -98,11 +97,9 @@ def evidence_gate(
     min_sim: float,
     allowed: List[str],
     canon_map: Dict[str, str] | None = None,
+    max_regs: Optional[int] = 1,          # cap kept regs
+    tie_eps: float = 0.02,                # allow near-ties
 ) -> GeoDecision:
-    """
-    Keep only regs that have retrieval support >= min_sim.
-    Canonicalize hit IDs so they match the same vocabulary as `decision.regulations`.
-    """
     allowed_set = set(allowed or [])
     canon_map = canon_map or {}
 
@@ -115,27 +112,20 @@ def evidence_gate(
         if hid in allowed_set:
             best[hid] = max(best.get(hid, 0.0), float(h.score))
 
-    # Debug visibility
-    if best:
-        logger.info("GATE min_sim=%s best-by-reg=%s",
-                    min_sim, {k: round(v, 3) for k, v in best.items()})
-    else:
-        logger.warning("GATE found no usable reg_id in hits; skipping drop to avoid nuking regs.")
-
-    # If we have no usable evidence, return unchanged (helps during bring-up)
     if not best:
+        logger.warning("GATE found no usable reg_id in hits; skipping drop to avoid nuking regs.")
         return decision
 
     proposed = decision.regulations or []
-    keep = [
-        r for r in proposed
-        if r in allowed_set and best.get(r, 0.0) >= float(min_sim)
-    ]
-    for r in proposed:
-        logger.info("GATE check %-28s -> %.3f (min %.3f)",
-                    r, best.get(r, 0.0), float(min_sim))
+    scored = [(r, best.get(r, 0.0)) for r in proposed if r in allowed_set]
+    scored = [(r, s) for r, s in scored if s >= float(min_sim)]
+    scored.sort(key=lambda x: x[1], reverse=True)
 
-    decision.regulations = sorted(set(keep))
+    if max_regs is not None and len(scored) > max_regs:
+        cutoff = scored[max_regs - 1][1] - tie_eps
+        scored = [rs for rs in scored if rs[1] >= cutoff][:max_regs]
+
+    decision.regulations = [r for r, _ in scored]
     return decision
 
 def apply_rule_overrides(feature_text: str, decision: GeoDecision) -> GeoDecision:

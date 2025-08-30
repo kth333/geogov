@@ -17,7 +17,7 @@ from .preprocess import preprocess_payload
 from .prompts import build_prompt, format_evidence
 from .rules import (
     build_reg_hits,
-    evidence_gate,            # signature: (decision, hits, min_sim, allowed)
+    evidence_gate,
     policy_abstain,
     canonicalize_regs,
     apply_rule_overrides,
@@ -55,7 +55,7 @@ def _make_vectorstore(cfg: Dict[str, Any]):
     return client, vs, top_k
 
 def _make_llm():
-    model = os.getenv("MODEL_NAME", "llama3")
+    model = os.getenv("MODEL_NAME", "qwen2.5:3b-instruct")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     # keep format="json" to bias pure JSON, but still robustly parse below
     return ChatOllama(
@@ -64,7 +64,7 @@ def _make_llm():
         temperature=0.1,
         keep_alive="30m",
         num_ctx=1024,
-        num_predict=512,
+        num_predict=96,
         num_thread=0,
         format="json",
     )
@@ -125,8 +125,10 @@ class RAGClassifier:
         th = self.cfg.get("thresholds") or {}
         self.allowed_ids: List[str] = self.cfg.get("regulations_allowed") or ALLOWED_FALLBACK
         self.canon_map: Dict[str, str] = self.cfg.get("regulation_synonyms") or {}
-        self.min_conf = float(th.get("confidence_min", 0.45))
-        self.min_sim = float(th.get("reg_evidence_min_sim", 0.00))
+        self.min_conf = float(th.get("confidence_min", 0.55))
+        self.min_sim = float(th.get("reg_evidence_min_sim", 0.50))
+        self.max_regs = int(th.get("regulations_max", 1))
+        self.tie_eps  = float(th.get("gating_tie_eps", 0.02))
         self.qdrant_client, self.vectorstore, self.top_k = _make_vectorstore(self.cfg)
         self.llm = _make_llm()
         self.parser = PydanticOutputParser(pydantic_object=GeoDecision)
@@ -236,6 +238,40 @@ class RAGClassifier:
             d.requires_geo_logic = None
             d.regulations = []
         return d
+    
+    def _scope_allowed(self, text: str) -> List[str]:
+        t = (text or "").lower()
+        scope = set()
+
+        if re.search(r"\butah\b", t):
+            scope.add("utah_social_media_regulation")
+        if re.search(r"\bflorida\b", t):
+            scope.add("florida_online_protections")
+        if re.search(r"\bcalifornia|\bca\b", t):
+            scope.add("california_kids_act")
+        if re.search(r"\b(eu|eea|europe|dsa|vlop)\b", t):
+            scope.add("dsa")
+        if re.search(r"\b(cs[ab]m|ncmec|cybertip(line)?|2258a|united states|us\b)", t):
+            scope.add("us_ncmec_reporting")
+
+        # If nothing matched, allow all (status quo)
+        return sorted(scope or self.allowed_ids)
+
+    def _compact_evidence(self, hits, per_reg=1, max_total=3, snippet_len=120) -> str:
+        # best hit per reg_id
+        best = {}
+        for h in hits:
+            rid = (h.reg_id or "").strip()
+            if not rid:
+                continue
+            prev = best.get(rid)
+            if prev is None or h.score > prev.score:
+                best[rid] = RegulationHit(reg_id=rid, score=h.score, snippet=(h.snippet or "")[:snippet_len])
+
+        # top regs overall
+        top = sorted(best.values(), key=lambda x: x.score, reverse=True)[:max_total]
+        # super-compact tab-separated lines; VERY few tokens
+        return "\n".join(f"{h.reg_id}\t{h.score:.3f}\t{h.snippet}" for h in top)
 
     # ---------- main ----------
 
@@ -247,9 +283,9 @@ class RAGClassifier:
         # 2) Retrieval (so we can gate feedback too)
         scored = self._retrieve(feature_text)
         score_is_distance = bool((self.cfg.get("retrieval") or {}).get("score_is_distance", True))
-        reg_hits = build_reg_hits(scored, score_is_distance=score_is_distance)
+        reg_hits = build_reg_hits(scored, score_is_distance=score_is_distance, snippet_len=160)
         log.info("EVIDENCE: %s", [{"reg_id": getattr(h, 'reg_id', ''), "score": round(h.score, 3)} for h in reg_hits])
-        evidence_text = format_evidence(reg_hits)
+        evidence_text = self._compact_evidence(reg_hits, max_total=3, snippet_len=120)
 
         # 3) Human feedback (if present) → early return
         feature_id = self._feature_id_for(title, description, docs)
@@ -264,7 +300,11 @@ class RAGClassifier:
             decision.regulations = canonicalize_regs(decision.regulations, self.allowed_ids, self.canon_map)
 
             if any(h.reg_id for h in reg_hits):
-                decision = evidence_gate(decision, reg_hits, self.min_sim, self.allowed_ids)
+                allowed_scoped = self._scope_allowed(feature_text)
+                decision = evidence_gate(
+                    decision, reg_hits, self.min_sim, allowed_scoped,
+                    self.canon_map, max_regs=self.max_regs, tie_eps=self.tie_eps
+                )
             else:
                 log.warning("GATE found no usable reg_id in hits; skipping drop (feedback path).")
 
@@ -291,7 +331,11 @@ class RAGClassifier:
         log.info("LLM regs (pre): %s", decision.regulations)
 
         if any(h.reg_id for h in reg_hits):
-            decision = evidence_gate(decision, reg_hits, self.min_sim, self.allowed_ids)
+            allowed_scoped = self._scope_allowed(feature_text)            
+            decision = evidence_gate(
+                decision, reg_hits, self.min_sim, allowed_scoped,
+                self.canon_map, max_regs=self.max_regs, tie_eps=self.tie_eps
+            )
         else:
             log.warning("GATE found no usable reg_id in hits; skipping drop to avoid nuking regs.")
         log.info("LLM regs (post gate): %s", decision.regulations)

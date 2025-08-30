@@ -90,7 +90,7 @@ CLASSIFIER_URL=http://classifier:8000
 
 # LLM (Ollama local)
 OLLAMA_BASE_URL=http://ollama:11434
-MODEL_NAME=llama3
+MODEL_NAME=qwen2.5:3b-instruct
 
 # Logging
 DEBUG=1

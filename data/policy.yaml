@@ -2,7 +2,7 @@ mode: evaluation_focus   # evaluation_focus | open_world
 
 retrieval:
   collection: regs
-  top_k: 10
+  top_k: 5
 
 regulations_allowed:
   - dsa
@@ -12,8 +12,10 @@ regulations_allowed:
   - us_ncmec_reporting
 
 thresholds:
-  confidence_min: 0.60
-  reg_evidence_min_sim: 0.10
+  confidence_min: 0.55
+  reg_evidence_min_sim: 0.50
+  regulations_max: 1
+  gating_tie_eps: 0.02
 
 abstain_patterns:
   ambiguous_geo:
