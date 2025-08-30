@@ -50,7 +50,7 @@ def _make_vectorstore(cfg: Dict[str, Any]):
         collection_name=collection,
         embeddings=_make_embeddings(),
         content_payload_key="text",     # maps payload['text'] -> Document.page_content
-        metadata_payload_key=None       # maps the WHOLE payload -> Document.metadata
+        metadata_payload_key="metadata"
     )
     return client, vs, top_k
 
