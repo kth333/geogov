@@ -6,10 +6,6 @@ Given a feature title, description, and docs, this project flags whether **geo-s
 
 ---
 
-## Demo links
-
----
-
 ## Problem fit
 
 Shipping global features means navigating region-specific obligations (minors, CSAM reporting, recommender transparency, etc.). Today, detection is manual and inconsistent. GeoGov turns that into a **repeatable, auditable step**:
@@ -92,15 +88,13 @@ CLASSIFIER_URL=http://classifier:8000
 OLLAMA_BASE_URL=http://ollama:11434
 MODEL_NAME=qwen2.5:3b-instruct
 
-# Logging
-DEBUG=1
 ```
 3) Build & start
 ```bash
 docker compose up -d --build
 ```
 
-4) Seed retrieval (first run or when regs change)
+4) Seed retrieval (Only necessary when regs change)
 ```bash
 docker compose exec retriever python -m retriever.seed
 ```
@@ -109,7 +103,7 @@ docker compose exec retriever python -m retriever.seed
 
 Open http://localhost:8001/static/index.html
 
-Paste a feature → Run → (optionally) Send feedback
+Paste a feature → Run /infer → Send feedback for human evaluation → View recent audit logs
 
 6) Single screening (HTTP)
 ```bash
