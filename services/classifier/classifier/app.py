@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import json
 from fastapi.responses import FileResponse
 import sqlite3, time
+import hashlib
 
 from classifier.chain import RAGClassifier
 
@@ -23,6 +24,7 @@ class InferIn(BaseModel):
 
 # Output schema
 class InferOut(BaseModel):
+    feature_id: str
     requires_geo_logic: Optional[bool]
     reasoning: str
     confidence: float
@@ -30,6 +32,10 @@ class InferOut(BaseModel):
 
 def _ensure_outputs_dir():
     os.makedirs("/app/outputs", exist_ok=True)
+
+def _compute_feature_id(title, description, docs):
+    raw = f"{title or ''}\n{description or ''}\n" + "\n".join(docs or [])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 def _fetch_latest_feedback(feature_id: str) -> dict | None:
     try:
@@ -62,8 +68,10 @@ def infer(inp: InferIn) -> InferOut:
     if rag is None:
         rag = RAGClassifier()
 
-    try:
+    try:       
+        feature_hash = rag._feature_id_for(inp.title, inp.description or "", inp.docs or [])
         out = rag.run(inp.title, inp.description, inp.docs)
+        out["feature_id"] = feature_hash
         if inp.feature_id:
             fb = _fetch_latest_feedback(inp.feature_id)
             if fb:
@@ -74,6 +82,7 @@ def infer(inp: InferIn) -> InferOut:
     except Exception as e:
         logging.exception("infer failed")
         out = {
+            "feature_id": "",  # or feature_hash if available
             "requires_geo_logic": None,
             "reasoning": f"Unhandled error in classifier: {e}",
             "confidence": 0.0,
@@ -93,6 +102,7 @@ class Feedback(BaseModel):
 
 @app.post("/feedback")
 def save_feedback(fb: Feedback):
+    fid = (fb.feature_id or "").strip() or _compute_feature_id(fb.title, fb.description, fb.docs)
     con = sqlite3.connect("/app/outputs/audit.db")
     cur = con.cursor()
     cur.execute("""
@@ -103,7 +113,7 @@ def save_feedback(fb: Feedback):
       )
     """)
     cur.execute("""INSERT INTO feedback VALUES(?,?,?,?,?,?,?,?,?)""", (
-        int(time.time()), fb.feature_id, fb.title, fb.description,
+        int(time.time()), fid, fb.title, fb.description,
         json.dumps(fb.docs), json.dumps(fb.requires_geo_logic),
         json.dumps(fb.regulations), fb.comment, fb.user
     ))

@@ -25,8 +25,16 @@
     <script type="text/babel">
       const { useEffect, useMemo, useState } = React;
 
+      // Deterministic feature ID: SHA-1 of title + "\n" + description + "\n" + docs.join("\n")
+      async function computeFeatureId({ title, description, docs }) {
+        const raw = `${title || ""}\n${description || ""}\n${(docs || []).join("\n")}`;
+        const enc = new TextEncoder().encode(raw);
+        const buf = await crypto.subtle.digest("SHA-1", enc);
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+      }
+
       function GeoGovApp() {
-        // Feature form
+        // Feature form (note: no Feature ID input for /infer anymore)
         const [featureId, setFeatureId] = useState("");
         const [title, setTitle] = useState("");
         const [description, setDescription] = useState("");
@@ -49,21 +57,34 @@
         const [error, setError] = useState(null);
 
         const docs = useMemo(
-          () => docsText.split("\\n").map((x) => x.trim()).filter(Boolean),
+          () => docsText.split("\n").map((x) => x.trim()).filter(Boolean),
           [docsText]
         );
+
+        // Auto-compute featureId from current inputs (so feedback ID autofills)
+        useEffect(() => {
+          (async () => {
+            const id = await computeFeatureId({ title: title.trim(), description: description.trim(), docs });
+            setFeatureId(id);
+          })();
+        }, [title, description, docsText]); // depends on docsText (source for docs)
 
         async function runInfer() {
           setInferring(true);
           setError(null);
+          // No feature_id sent to /infer
           const body = {
-            feature_id: featureId.trim() || null,
             title: title.trim(),
             description: description.trim(),
             docs,
           };
           try {
             setInferOut({ loading: true, body });
+
+            // Ensure featureId is up-to-date before/after infer
+            const id = await computeFeatureId(body);
+            setFeatureId(id);
+
             const res = await fetch("/infer", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -72,12 +93,14 @@
             if (!res.ok) throw new Error(`/infer failed: ${res.status}`);
             const data = await res.json();
             setInferOut(data);
-            // pre-fill feedback
-            const rgl = data && typeof data.requires_geo_logic !== "undefined" ? String(data.requires_geo_logic) : "";
+
+            // Prefill feedback fields from model output
+            const rgl = (typeof data.requires_geo_logic !== "undefined") ? String(data.requires_geo_logic) : "";
             setFbRequires(rgl);
             setFbRegs(((data && data.regulations) || []).join(","));
+            // featureId already computed locally; keep it
           } catch (e) {
-            setError(e && e.message ? e.message : String(e));
+            setError(e?.message || String(e));
           } finally {
             setInferring(false);
           }
@@ -98,8 +121,12 @@
         async function submitFeedback() {
           setSubmitting(true);
           setError(null);
+
+          // Recompute ID right before submit, in case user changed fields
+          const finalId = (featureId || (await computeFeatureId({ title: title.trim(), description: description.trim(), docs })));
+
           const payload = {
-            feature_id: featureId.trim() || "",
+            feature_id: finalId,
             title: title.trim(),
             description: description.trim(),
             docs,
@@ -119,7 +146,7 @@
             toast("Feedback saved");
             await loadRecent();
           } catch (e) {
-            setError(e && e.message ? e.message : String(e));
+            setError(e?.message || String(e));
           } finally {
             setSubmitting(false);
           }
@@ -134,7 +161,7 @@
             const { items } = await res.json();
             setRecent(Array.isArray(items) ? items : []);
           } catch (e) {
-            setError(e && e.message ? e.message : String(e));
+            setError(e?.message || String(e));
           } finally {
             setLoadingRecent(false);
           }
@@ -155,15 +182,8 @@
 
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                 <Card title="Feature" subtitle="Describe what you’re checking. These inputs are sent to /infer">
-                  <Field label="Feature ID (optional)">
-                    <input
-                      value={featureId}
-                      onChange={(e) => setFeatureId(e.target.value)}
-                      className={inputCls}
-                      placeholder="e.g. 2"
-                    />
-                  </Field>
-                  <Field label="Title">
+                  {/* Feature ID input removed per request */}
+                  <Field label="Title (Required)">
                     <input
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
@@ -210,7 +230,15 @@
               <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
                 <Card title="Human Feedback" subtitle="Ground the decision with expert input. This posts to /feedback">
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <Field label="requires_geo_logic">
+                    <Field label="ID">
+                      <input
+                        value={featureId}
+                        onChange={(e) => setFeatureId(e.target.value)}
+                        className={inputCls}
+                        placeholder="auto-computed SHA-1 (editable)"
+                      />
+                    </Field>
+                    <Field label="NEW REQUIRES_GEO_LOGIC">
                       <input
                         value={fbRequires}
                         onChange={(e) => setFbRequires(e.target.value)}
@@ -218,15 +246,16 @@
                         placeholder="true | false | null"
                       />
                     </Field>
-                    <Field label="regulations (comma separated)">
-                      <input
-                        value={fbRegs}
-                        onChange={(e) => setFbRegs(e.target.value)}
-                        className={inputCls}
-                        placeholder="e.g. dsa, california_kids_act"
-                      />
-                    </Field>
                   </div>
+
+                  <Field label="regulations (comma separated)">
+                    <input
+                      value={fbRegs}
+                      onChange={(e) => setFbRegs(e.target.value)}
+                      className={inputCls}
+                      placeholder="e.g. dsa, california_kids_act"
+                    />
+                  </Field>
 
                   <Field label="Comment">
                     <input
@@ -249,7 +278,9 @@
                     <Button onClick={submitFeedback} loading={submitting} icon="💾">
                       Submit /feedback
                     </Button>
-                    <span className="text-xs text-slate-500">Posting sends your inputs and the decision back to the audit log.</span>
+                    <span className="text-xs text-slate-500">
+                      Posting sends your inputs and the decision back to the audit log.
+                    </span>
                   </div>
                 </Card>
 
@@ -383,15 +414,6 @@
         );
       }
 
-      function QuickStat({ label, value }) {
-        return (
-          <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
-            <div className="font-semibold">{value}</div>
-            <div className="uppercase tracking-wide">{label}</div>
-          </div>
-        );
-      }
-
       function Th({ children }) { return <th className="px-3 py-2 text-left">{children}</th>; }
       function Td({ children }) { return <td className="px-3 py-2 align-top">{children}</td>; }
 
@@ -469,7 +491,6 @@
       }
 
       function toast(msg) {
-        // lightweight toast – no dependency
         const id = `t-${Math.random().toString(36).slice(2)}`;
         const el = document.createElement("div");
         el.id = id;

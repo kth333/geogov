@@ -328,7 +328,7 @@ class RAGClassifier:
 
         if not scope and self._has_explicit_hook(text):
             return self.allowed_ids[:]
-        return sorted(list({*(scope or self.allowed_ids)}))
+        return sorted(scope)
 
     def _compact_evidence(self, hits, per_reg=1, max_total=3, snippet_len=120) -> str:
         # best hit per reg_id
