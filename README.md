@@ -1,8 +1,8 @@
-# Project Name (to be decided)
+# GeoGov
 
 **TikTok TechJam 2025 Track 3 Submission**
 
-Given a feature title, description, and docs, this project flags whether **geo-specific compliance logic** is required, explains **why**, and names the **related regulation families**
+Given a feature title, description, and docs, GeoGov flags whether **geo-specific compliance logic** is required, explains **why**, and names the **related regulation families**
 
 ---
 
