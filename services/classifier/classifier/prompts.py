@@ -29,7 +29,7 @@ Regulations:
   Title/Description/Docs (not retrieval). Else [].
 
 Fields:
-- reasoning (≤ 25 words): For false/null, DO NOT mention laws/regulators/jurisdictions; explain product-only or geo-ambiguity.
+- reasoning (≤ 10 words): For false: DO NOT mention laws/regulators/jurisdictions; explain product-only. For null: explain geo-ambiguity
 - confidence: 0–1; be conservative when unsure.
 """
 

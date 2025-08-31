@@ -12,8 +12,9 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <!-- Babel for JSX in-browser (fine for demo/pitch) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Papa Parse for CSV -->
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
     <style>
-      /* Smooth font rendering for the demo */
       :root { color-scheme: light dark; }
       body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
     </style>
@@ -34,7 +35,7 @@
       }
 
       function GeoGovApp() {
-        // Feature form (note: no Feature ID input for /infer anymore)
+        // Feature form
         const [featureId, setFeatureId] = useState("");
         const [title, setTitle] = useState("");
         const [description, setDescription] = useState("");
@@ -72,7 +73,6 @@
         async function runInfer() {
           setInferring(true);
           setError(null);
-          // No feature_id sent to /infer
           const body = {
             title: title.trim(),
             description: description.trim(),
@@ -84,9 +84,6 @@
             setInferOut({ loading: true, body: { ...body, feature_id: id } });
 
             // Ensure featureId is up-to-date before/after infer
-            const id = await computeFeatureId(body);
-            setFeatureId(id);
-
             const res = await fetch("/infer", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -100,7 +97,6 @@
             const rgl = (typeof data.requires_geo_logic !== "undefined") ? String(data.requires_geo_logic) : "";
             setFbRequires(rgl);
             setFbRegs(((data && data.regulations) || []).join(","));
-            // featureId already computed locally; keep it
           } catch (e) {
             setError(e?.message || String(e));
           } finally {
@@ -124,7 +120,6 @@
           setSubmitting(true);
           setError(null);
 
-          // Recompute ID right before submit, in case user changed fields
           const finalId = (featureId || (await computeFeatureId({ title: title.trim(), description: description.trim(), docs })));
 
           const payload = {
@@ -182,7 +177,10 @@
                 </div>
               )}
 
-              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+              {/* CSV Batch Runner */}
+              <CSVRunner />
+
+              <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
                 <Card title="Feature" subtitle="Describe what you’re checking. These inputs are sent to /infer">
                   {/* Feature ID input removed per request */}
                   <Field label="Title (Required)">
@@ -338,6 +336,161 @@
         );
       }
 
+      // ------------------------- CSV Batch Component -------------------------
+      function CSVRunner() {
+        const [file, setFile] = React.useState(null);
+        const [rows, setRows] = React.useState([]);
+        const [results, setResults] = React.useState([]);
+        const [running, setRunning] = React.useState(false);
+        const [err, setErr] = React.useState("");
+
+        // headers: title, description, docs (docs are semicolon-separated)
+        function handleFile(e) {
+          setErr("");
+          const f = e.target.files?.[0];
+          if (!f) return;
+          setFile(f);
+          Papa.parse(f, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (res) => {
+              if (!Array.isArray(res.data) || !res.data.length) {
+                setErr("No data in CSV.");
+                setRows([]);
+              } else {
+                setRows(res.data);
+              }
+            },
+            error: (e) => setErr(`Parse error: ${e?.message || e}`),
+          });
+        }
+
+        async function runBatch() {
+          setErr("");
+          if (!rows.length) { setErr("No rows parsed."); return; }
+
+          setRunning(true);
+          const out = [];
+          for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            const title = String(r.title || "").trim();
+            if (!title) { out.push({ index: i, error: "Missing title" }); continue; }
+            const description = String(r.description || "").trim();
+            const docs = String(r.docs || "")
+              .split(";")
+              .map(s => s.trim())
+              .filter(Boolean);
+
+            try {
+              // include feature_id so server can apply feedback if present
+              const fid = await computeFeatureId({ title, description, docs });
+              const res = await fetch("/infer", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title, description, docs, feature_id: fid }),
+              });
+              if (!res.ok) throw new Error(`/infer ${res.status}`);
+              const data = await res.json();
+              out.push({
+                index: i,
+                title,
+                description,
+                docs: docs.join(";"),
+                feature_id: fid,
+                requires_geo_logic: data.requires_geo_logic,
+                regulations: Array.isArray(data.regulations) ? data.regulations.join(";") : "",
+                confidence: data.confidence,
+                reasoning: data.reasoning,
+                error: "",
+              });
+            } catch (e) {
+              out.push({
+                index: i,
+                title,
+                description,
+                docs: docs.join(";"),
+                feature_id: "",
+                requires_geo_logic: "",
+                regulations: "",
+                confidence: "",
+                reasoning: "",
+                error: String(e.message || e),
+              });
+            }
+          }
+          setResults(out);
+          setRunning(false);
+        }
+
+        function downloadResults() {
+          if (!results.length) return;
+          const header = [
+            "index","feature_id","title","description","docs",
+            "requires_geo_logic","regulations","confidence","reasoning","error"
+          ];
+          const csv = [
+            header.join(","),
+            ...results.map(r => header.map(k => csvEscape(r[k])).join(","))
+          ].join("\n");
+
+          const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "inference_results.csv";
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(url);
+        }
+
+        return (
+          <Card
+            title="CSV Batch Inference"
+            subtitle='Upload a CSV with columns: title, description, docs (docs separated by ";"). Each row calls /infer.'
+          >
+            {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
+            <div className="flex items-center gap-3">
+              <input type="file" accept=".csv" onChange={handleFile} className="text-sm" />
+              <Button onClick={runBatch} loading={running}>Run on CSV</Button>
+              <Button onClick={downloadResults} loading={false}>Download Results</Button>
+            </div>
+
+            <div className="mt-3 text-xs text-slate-500">
+              Parsed rows: {rows.length} • Results: {results.length}
+            </div>
+
+            {!!results.length && (
+              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
+                    <tr>
+                      <Th>#</Th>
+                      <Th>Feature ID</Th>
+                      <Th>Title</Th>
+                      <Th>Requires</Th>
+                      <Th>Regs</Th>
+                      <Th>Conf</Th>
+                      <Th>Error</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((r,i) => (
+                      <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
+                        <Td>{r.index}</Td>
+                        <Td className="font-mono text-[11px]">{r.feature_id}</Td>
+                        <Td>{r.title}</Td>
+                        <Td>{String(r.requires_geo_logic)}</Td>
+                        <Td>{r.regulations}</Td>
+                        <Td>{typeof r.confidence === "number" ? r.confidence.toFixed(3) : ""}</Td>
+                        <Td className="text-[11px]">{r.error || ""}</Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        );
+      }
+
       // ------------------------- UI BUILDING BLOCKS -------------------------
       const inputBase =
         "w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-950/50 dark:focus:border-slate-400 dark:focus:ring-slate-800";
@@ -490,6 +643,12 @@
       function escapeHtml(s) {
         const str = String(s ?? "");
         return str.replace(/[&<>\"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+      }
+
+      function csvEscape(v) {
+        const s = String(v ?? "");
+        if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
       }
 
       function toast(msg) {

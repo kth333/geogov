@@ -1,0 +1,31 @@
+id,title,requires_geo_logic,reasoning,regulations
+1,Curfew login blocker with ASL and GH for Utah minors,true,Curfew login blocker for Utah minors requires Geo-handler to enforce within Utah boundaries.,utah_social_media_regulation
+2,PF default toggle with NR enforcement for California teens,true,"California SB976 requires PF default disable for minors, no hook in title or description",california_kids_act
+3,Child abuse content scanner using T5 and CDS triggers,true,"US federal law for child sexual abuse content reporting, California Kids Act, and Utah Social Media Regulation Act apply.",us_ncmec_reporting
+4,Content visibility lock with NSP for EU DSA,true,EU DSA compliance with EU region enforcement,dsa
+5,Jellybean-based parental notifications for Florida regulation,true,"Feature targets Florida's parental control law, requiring geolocated enforcement.",florida_online_protections
+6,Unified retention control via DRT & CDS,null,Requires Geo Logic for Florida and Utah regulations due to minors' specific protections.,
+7,NSP auto-flagging,null,"NSP auto-flagging requires explicit legal hook (e.g., California Kids Act, Florida Online Protections)",
+8,T5 tagging for sensitive reports,null,"High-risk content reporting requires explicit legal hook (California Kids Act, Utah Social Media Regulation)",
+9,Underage protection via Snowcap trigger,null,"Underage protection via Snowcap triggered for all underage users platform-wide, applying ASL to segment accounts and monitoring usage using baseline behavior.",
+10,Universal PF deactivation on guest mode,false,Universal PF deactivation on guest mode requires explicit Geo logic due to US federal reporting obligations for child sexual abuse material (NCMEC).,
+11,Story resharing with content expiry,null,Feature requires Geo Logic due to US federal reporting obligations for child sexual abuse material (NCMEC).,
+12,Leaderboard system for weekly creators,false,Leaderboard system requires explicit Geo Logic due to Utah Social Media Regulation Act,
+13,Mood-based PF enhancements,false,Geo intent is ambiguous as the feature does not target minors or specific jurisdictions.,
+14,New user rewards via NR profile suggestions,false,"Title and Description contain A/B testing with Spanner, which is a business decision without legal implications.",
+15,Creator fund payout tracking in CDS,null,Compliance required due to Utah Social Media Regulation Act,
+16,Trial run of video replies in EU,null,Trial run in EU requires Geo Logic due to jurisdictional focus,
+17,Canada-first PF variant test,null,"Early experimentation in Canada with PF variant, no legal hook identified",
+18,Chat UI overhaul,null,"Geo-specific testing in CA, US, BR, ID requires Geo-handler for location targeting and ShadowMode analytics collection.",
+19,Regional trial of autoplay behavior,null,Requires Geo Logic for US-specific policy,
+20,South Korea dark theme A/B experiment,false,Geo-specific A/B test in South Korea requires explicit Geo logic due to jurisdictional focus.,
+21,Age-specific notification controls with ASL,null,Requires age-specific notification controls due to US federal reporting obligations for child sexual abuse material (NCMEC).,
+22,Chat content restrictions via LCP,null,"Local compliance policy for chat content restrictions, no legal requirements mentioned.",
+23,Video upload limits for new users,null,Requires Geo Logic due to California Kids Act and NCMEC terms,
+24,Flag escalation flow for sensitive comments,null,Sensitive comment detection requires Geo Logic due to jurisdiction-specific regulations.,
+25,User behavior scoring for policy gating,null,Explicit hook detected related to parental consent and oversight,
+26,Minor-safe chat expansion via Jellybean,null,"Feature targets users flagged by Jellybean for compliance monitoring, hence requires Geo Logic.",
+27,Friend suggestions with underage safeguards,null,Requires Geo Logic for underage safeguards due to US federal reporting obligations and Utah social media regulation.,
+28,Reaction GIFs with embedded filtering,null,Requires Geo Logic due to US federal reporting obligations for child sexual abuse material (NCMEC).,
+29,Longform posts with age-based moderation,null,Requires age-based moderation for longform posts due to underage authorship and Snowcap policy.,
+30,Custom avatar system with identity checks,null,Custom avatar system with age-sensitive logic for underage profiles,

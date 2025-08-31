@@ -6,6 +6,9 @@ Given a feature title, description, and docs, this project flags whether **geo-s
 
 ---
 
+## Output from given test dataset
+./outputs/run_outputs.csv
+
 ## Problem fit
 
 Shipping global features means navigating region-specific obligations (minors, CSAM reporting, recommender transparency, etc.). Today, detection is manual and inconsistent. GeoGov turns that into a **repeatable, auditable step**:
